@@ -1,0 +1,25 @@
+{
+  "name": "tunequeue-desktop",
+  "version": "0.1.0",
+  "description": "Twitch song requests for Spotify without API and Premium. Desktop app.",
+  "private": true,
+  "license": "MIT",
+  "main": "build/main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch --electron",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "dist": "npm run build && electron-builder --win --publish never"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.13",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "ws": "^8.18.0"
+  }
+}

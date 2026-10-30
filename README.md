@@ -4,6 +4,15 @@
 
 > 🇷🇺 [На русском](README.ru.md)
 
+> ### ⭐ Основное направление — десктоп-приложение
+>
+> **[desktop/](desktop/)** — программа, которую стример просто скачивает: она сама читает
+> чат Twitch (`!sr <ссылка>`), держит очередь и управляет **локальным** Spotify.
+> Без Spotify API, без Premium, без серверов и подписок. См. [desktop/README.md](desktop/README.md).
+>
+> Веб-версия ниже — рабочий прототип (веб-сервис с OAuth + Premium/плейлист),
+> код остаётся в репозитории.
+
 Viewers write `!play` in your Twitch chat — the track lands in the queue and gets pushed
 straight into your Spotify player. You control everything from one dashboard.
 
