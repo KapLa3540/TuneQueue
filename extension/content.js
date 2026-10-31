@@ -1,39 +1,28 @@
 /* TuneQueue content script:
- * 1) слушает чат Twitch напрямую (WebSocket) — анонимно или с токеном стримера;
- * 2) по !sr/!play <ссылка> сам находит трек в Spotify и жмёт «Добавить в очередь»;
- * 3) после успеха отвечает в чате: «@user Queued [трек]» (если Twitch подключён).
- * Работает в фоновой вкладке — окно/игру не поднимает.
+ * - connects to the streamer's Twitch chat (authed WebSocket after "Authorize Twitch");
+ * - on !sr/!play <link> finds the track in Spotify and clicks the native
+ *   "Add to queue" button via the UI (no Premium, no Web API);
+ * - replies in chat: "@user Queued [Artist - Track]".
+ * Runs in a background tab — never steals focus.
  */
 (() => {
   'use strict';
 
   const P = window.TQParse;
   const ADD_COOLDOWN_MS = 15_000;
-  const MAX_EVENTS = 60;
 
-  // ---------- состояние ----------
-  const state = {
-    channel: '',
-    enabled: true,
-    connected: false,
-    joined: false,
-    joinRequestedAt: 0,
-    busy: false,
-    events: [],
-  };
+  // ---------- state ----------
+  const state = { channel: '', enabled: true, connected: false, joined: false, joinRequestedAt: 0, busy: false };
   const cooldowns = new Map();
   const pending = [];
 
   function log(text) {
-    state.events.push({ t: Date.now(), text });
-    if (state.events.length > MAX_EVENTS) state.events.shift();
-    persist();
+    console.debug('[TuneQueue]', text);
   }
 
   function persist() {
     try {
       chrome.storage.local.set({
-        tq_events: state.events,
         tq_status: {
           channel: state.channel,
           enabled: state.enabled,
@@ -57,38 +46,33 @@
     return Date.now() - state.joinRequestedAt > 12_000 ? 'failed' : 'joining';
   }
 
-  // ---------- аккаунт Twitch (для ответов в чате) ----------
-  const tw = { token: null, refresh: null, expires: 0, nick: null, clientId: '' };
+  // ---------- Twitch account ----------
+  const tw = { token: null, refresh: null, expires: 0, nick: null };
+  const CLIENT_ID = window.TQ_TWITCH_CLIENT_ID || '';
   let lastSayAt = 0;
-  let replySilentLogged = false;
 
   function loadTwitchCreds(cb) {
-    chrome.storage.local.get(
-      ['tq_twitch_client_id', 'tq_twitch_token', 'tq_twitch_refresh', 'tq_twitch_expires', 'tq_twitch_nick'],
-      (r) => {
-        tw.clientId = r.tq_twitch_client_id || '';
-        tw.token = r.tq_twitch_token || null;
-        tw.refresh = r.tq_twitch_refresh || null;
-        tw.expires = r.tq_twitch_expires || 0;
-        tw.nick = r.tq_twitch_nick || null;
-        if (cb) cb();
-      },
-    );
+    chrome.storage.local.get(['tq_twitch_token', 'tq_twitch_refresh', 'tq_twitch_expires', 'tq_twitch_nick'], (r) => {
+      tw.token = r.tq_twitch_token || null;
+      tw.refresh = r.tq_twitch_refresh || null;
+      tw.expires = r.tq_twitch_expires || 0;
+      tw.nick = r.tq_twitch_nick || null;
+      if (cb) cb();
+    });
   }
 
-  function saveTwitchCreds(patch) {
+  function saveTwitchCreds() {
     chrome.storage.local.set({
       tq_twitch_token: tw.token,
       tq_twitch_refresh: tw.refresh,
       tq_twitch_expires: tw.expires,
       tq_twitch_nick: tw.nick,
-      ...patch,
     });
   }
 
-  async function fetchTwitchLogin(clientId, token) {
+  async function fetchTwitchLogin(token) {
     const res = await fetch('https://api.twitch.tv/helix/users', {
-      headers: { 'Client-Id': clientId, Authorization: 'Bearer ' + token },
+      headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + token },
     });
     if (!res.ok) return null;
     const d = await res.json();
@@ -96,15 +80,14 @@
   }
 
   async function refreshTwitchToken() {
-    if (!tw.token || !tw.clientId) return;
+    if (!tw.token || !tw.refresh) return;
     if (tw.expires && tw.expires - Date.now() > 60_000) return;
-    if (!tw.refresh) return;
     try {
       const res = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-          client_id: tw.clientId,
+          client_id: CLIENT_ID,
           grant_type: 'refresh_token',
           refresh_token: tw.refresh,
         }).toString(),
@@ -115,35 +98,38 @@
       tw.token = b.access_token;
       tw.refresh = b.refresh_token || tw.refresh;
       tw.expires = b.expires_in ? Date.now() + b.expires_in * 1000 : 0;
-      saveTwitchCreds({});
-      restartChat(); // новый токен → переподключаем IRC с новым PASS
+      saveTwitchCreds();
+      restartChat();
     } catch (e) {
       /* ignore */
     }
   }
 
-  /** Вход Twitch по Device Code. */
+  /** Sign in with Twitch (device code flow, one button in the popup). */
   let deviceGen = 0;
 
   async function beginTwitchLogin() {
-    if (!tw.clientId) throw new Error('Сначала сохрани Client ID приложения Twitch');
+    if (!CLIENT_ID) {
+      throw new Error('Twitch app Client ID is not set — see extension/config.js');
+    }
     const res = await fetch('https://id.twitch.tv/oauth2/device', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: tw.clientId, scopes: 'chat:read chat:edit' }).toString(),
+      body: new URLSearchParams({ client_id: CLIENT_ID, scopes: 'chat:read chat:edit' }).toString(),
     });
     if (!res.ok) throw new Error('Twitch device endpoint: HTTP ' + res.status);
     const info = await res.json();
     const dev = {
       user_code: info.user_code,
       verification_uri: info.verification_uri,
+      verification_uri_complete: info.verification_uri_complete || info.verification_uri,
       device_code: info.device_code,
       interval: info.interval || 5,
       expiresAt: Date.now() + (info.expires_in || 1800) * 1000,
       status: 'waiting',
     };
     chrome.storage.local.set({ tq_device: dev });
-    log('Twitch: введи код на ' + info.verification_uri);
+    log('Twitch: enter the code at ' + info.verification_uri);
     const gen = ++deviceGen;
     void pollDevice(dev, gen);
     return dev;
@@ -153,7 +139,7 @@
     if (gen !== deviceGen) return;
     if (Date.now() > dev.expiresAt) {
       chrome.storage.local.set({ tq_device: { status: 'expired' } });
-      log('Twitch: код истёк');
+      log('Twitch: code expired');
       return;
     }
     try {
@@ -161,7 +147,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-          client_id: tw.clientId,
+          client_id: CLIENT_ID,
           scopes: 'chat:read chat:edit',
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
           device_code: dev.device_code,
@@ -181,34 +167,32 @@
       }
       if (!body.access_token) {
         chrome.storage.local.set({ tq_device: { status: 'error', error: msg || 'HTTP ' + res.status } });
-        log('Twitch: ошибка входа: ' + (msg || res.status));
+        log('Twitch login error: ' + (msg || res.status));
         return;
       }
 
-      // успех
+      // success
       tw.token = body.access_token;
       tw.refresh = body.refresh_token || null;
       tw.expires = body.expires_in ? Date.now() + body.expires_in * 1000 : 0;
-      const nick = await fetchTwitchLogin(tw.clientId, tw.token);
-      if (!nick) throw new Error('не удалось получить логин Twitch');
+      const nick = await fetchTwitchLogin(tw.token);
+      if (!nick) throw new Error('could not get the Twitch login');
       tw.nick = nick;
-      saveTwitchCreds({});
+      saveTwitchCreds();
       chrome.storage.local.set({ tq_device: { status: 'done', nick } });
-      log('Twitch: подключены как @' + nick + ' — теперь отвечаем в чате');
-      restartChat();
+      log('Twitch: connected as @' + nick);
+      startChatForNick(nick);
+      persist();
     } catch (e) {
       chrome.storage.local.set({ tq_device: { status: 'error', error: String(e && e.message) } });
-      log('Twitch: ошибка входа: ' + (e && e.message ? e.message : e));
+      log('Twitch login error: ' + (e && e.message ? e.message : e));
     }
   }
 
-  /** Ответ в чат от имени стримера. */
+  /** Chat reply from the streamer's account. */
   async function say(text) {
-    if (!tw.token || !tw.nick) {
-      if (!replySilentLogged) {
-        replySilentLogged = true;
-        log('ℹ в чат не ответили (Twitch не подключён): ' + text);
-      }
+    if (!tw.token || !tw.nick || !state.channel) {
+      log('not replying (Twitch not connected): ' + text);
       return;
     }
     await refreshTwitchToken();
@@ -221,15 +205,25 @@
     ircSend('PRIVMSG #' + state.channel + ' :' + text);
   }
 
-  // ---------- Twitch IRC ----------
+  // ---------- Twitch IRC (authed only) ----------
   let ws = null;
   let stopped = true;
   let ready = false;
   let backoff = 1000;
   let myNick = '';
 
+  function startChatForNick(nick) {
+    state.channel = String(nick).toLowerCase();
+    chatDisconnect();
+    stopped = true;
+    chatConnect();
+    log('connecting to #' + state.channel + '…');
+    persist();
+  }
+
   function chatConnect() {
     if (!stopped) return;
+    if (!tw.token || !tw.nick || !state.channel) return;
     stopped = false;
     openWs();
   }
@@ -251,7 +245,7 @@
   function restartChat() {
     chatDisconnect();
     stopped = true;
-    if (state.channel) chatConnect();
+    if (state.channel && tw.token) chatConnect();
   }
 
   function ircSend(line) {
@@ -264,20 +258,15 @@
     try {
       sock = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
     } catch (e) {
-      log('✗ не удалось открыть WebSocket к Twitch: ' + e.message);
+      log('cannot open WebSocket to Twitch: ' + e.message);
       return;
     }
     ws = sock;
 
     sock.addEventListener('open', () => {
-      if (tw.token && tw.nick) {
-        myNick = String(tw.nick).toLowerCase();
-        ircSend('PASS oauth:' + String(tw.token).replace(/^oauth:/, ''));
-        ircSend('NICK ' + myNick);
-      } else {
-        myNick = 'justinfan' + Math.floor(Math.random() * 900_000 + 100_000);
-        ircSend('NICK ' + myNick);
-      }
+      myNick = String(tw.nick).toLowerCase();
+      ircSend('PASS oauth:' + String(tw.token).replace(/^oauth:/, ''));
+      ircSend('NICK ' + myNick);
       ircSend('CAP REQ :twitch.tv/tags twitch.tv/commands');
     });
 
@@ -298,7 +287,7 @@
     });
 
     sock.addEventListener('error', () => {
-      /* close последует */
+      /* close follows */
     });
   }
 
@@ -312,19 +301,19 @@
       backoff = 1000;
       state.connected = true;
       state.joinRequestedAt = Date.now();
-      log(
-        'чат: подключились' + (tw.nick ? ' как @' + tw.nick : ' (анонимно)') + ' (#' + state.channel + ')',
-      );
+      log('chat connected as @' + myNick + ' (#' + state.channel + ')');
       ircSend('JOIN #' + state.channel);
       persist();
       return;
     }
     if (line.includes(' NOTICE ') && /Login authentication failed|Improperly formatted auth/i.test(line)) {
-      log('⚠ токен Twitch отклонён — отключаем аккаунт');
+      log('Twitch token rejected — disconnecting the account');
       tw.token = null;
       tw.nick = null;
-      saveTwitchCreds({});
+      saveTwitchCreds();
+      chrome.storage.local.set({ tq_device: { status: 'error', error: 'Twitch rejected the login — try again' } });
       restartChat();
+      persist();
       return;
     }
     const sp = line.indexOf(' ');
@@ -333,7 +322,7 @@
     const nick = prefix.split('!')[0];
     if (nick && nick.toLowerCase() === myNick && rest.startsWith('JOIN #')) {
       state.joined = true;
-      log('бот вошёл в #' + state.channel);
+      log('bot joined #' + state.channel);
       persist();
       return;
     }
@@ -365,20 +354,14 @@
     return { user: prefix.split('!')[0], message: params.slice(sp3 + 1) };
   }
 
-  // ---------- команды из чатa ----------
+  // ---------- chat commands ----------
   function onChatMessage(user, rawText) {
     if (!state.enabled) return;
-    if (/!(sr|play|songrequest)/i.test(rawText)) {
-      log('чат: @' + user + ': ' + String(rawText).trim().slice(0, 70));
-    }
     const cmd = P.normalizeCommand(rawText);
     if (!cmd) return;
-    if (!cmd.known) {
-      log('@' + user + ' написал !' + cmd.raw.slice(0, 18));
-      return;
-    }
+    if (!cmd.known) return;
     if (!cmd.rest) {
-      log('→ отказ: нет ссылки');
+      log('@' + user + ' posted the command without a link');
       return;
     }
 
@@ -386,19 +369,19 @@
     if (!track) {
       const urlTok = (cmd.rest.match(/https?:\/\/\S+/) || [''])[0].replace(/[),.;!?'"\]]+$/, '');
       if (urlTok && P.isSpotifyShortLink(urlTok)) {
-        log('пробуем разрешить короткую ссылку…');
+        log('resolving a short link…');
         void resolveShort(urlTok).then((t) => {
           if (t) enqueue(t, user);
-          else log('→ отказ: короткая ссылка не открылась');
+          else log('short link did not resolve');
         });
         return;
       }
-      log('→ отказ: нужна ссылка на трек (open.spotify.com/track/…)');
+      log('@' + user + ' posted no Spotify track link');
       return;
     }
 
     if (!P.cooldownAllows(cooldowns, state.channel + ':' + user, Date.now(), ADD_COOLDOWN_MS)) {
-      log('→ кулдаун @' + user + ', пропущено');
+      log('cooldown for @' + user + ' — skipped');
       return;
     }
     enqueue(track, user);
@@ -416,7 +399,7 @@
   function enqueue(track, by) {
     const job = { trackId: track.trackId, url: track.url, title: '', artist: '', by: by, attempts: 0 };
     pending.push(job);
-    log('✓ принято от @' + by + ' (в очереди расширения: ' + pending.length + ')');
+    log('queued request from @' + by + ' (extension queue: ' + pending.length + ')');
     void fetchMeta(job);
     void processQueue();
   }
@@ -431,11 +414,11 @@
         job.artist = data.author_name || '';
       }
     } catch (e) {
-      /* без метаданных — не страшно */
+      /* metadata is best-effort */
     }
   }
 
-  // ---------- постановка в очередь через интерфейс Spotify ----------
+  // ---------- adding to the queue via Spotify's own UI ----------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function waitFor(fn, timeoutMs, stepMs) {
@@ -450,7 +433,7 @@
         }
         if (v) return resolve(v);
         if (Date.now() > deadline) return resolve(null);
-        setTimeout(poll, stepMs || 180);
+        setTimeout(poll, stepMs || 120);
       })();
     });
   }
@@ -468,22 +451,14 @@
     return true;
   }
 
-  function setReactValue(input, value) {
-    const proto = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-    if (proto && proto.set) proto.set.call(input, value);
-    else input.value = value;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
   function pressEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
   }
 
-  /* Кандидаты селекторов. Если Spotify обновит интерфейс — дополни списки здесь. */
+  /* Selector candidates. If Spotify updates the UI — extend these lists here. */
   const MORE_BTN_SEL = [
-    '[data-testid="more-button"]',
+    'button[data-testid="more-button"]',
     'button[aria-label*="More options" i]',
     'button[aria-label*="Ещё" i]',
     'button[aria-label*="Weitere Optionen" i]',
@@ -495,33 +470,23 @@
   function findMoreButtonGlobal() {
     const nodes = document.querySelectorAll(MORE_BTN_SEL);
     for (const b of nodes) {
-      if (b.closest('footer')) continue; // нижний плеер — не он
+      if (b.closest('footer')) continue; // bottom player — not this
       if (b.closest('[data-testid="now-playing-widget"]')) continue;
       return b;
     }
     return null;
   }
 
-  function findAddToQueueItem() {
-    const items = document.querySelectorAll('[role="menuitem"], [role="button"], [role="menuitemcheckbox"]');
-    for (const el of items) {
-      const label = el.getAttribute('aria-label') || el.textContent || '';
-      if (P.matchAddToQueue(label)) return el;
-    }
-    return null;
-  }
-
-  /* Главный путь — как в проверенном open-source решении (oct'26):
-   * SPA-переход на /search/{запрос}/tracks → точный трек по ID в ссылке →
-   * кнопка [data-testid="more-button"] в его строке → меню [role="menu"] →
-   * пункт «Добавить в очередь» по тексту. */
+  /* Main path — same as the proven open-source implementation (Oct'26):
+   * SPA-navigate to /search/{query}/tracks → exact track by ID in the link →
+   * [data-testid="more-button"] in its row → [role="menu"] → "Add to queue" by text. */
   function navigateSpaTo(pathWithQuery) {
     const dest = pathWithQuery;
     if (dest !== location.pathname + location.search + location.hash) {
-      const state = { ...(window.history.state || {}), key: Math.random().toString(36).slice(2, 10) };
-      if (Number.isInteger(state.idx)) state.idx += 1;
-      window.history.pushState(state, '', dest);
-      window.dispatchEvent(new PopStateEvent('popstate', { state }));
+      const hist = { ...(window.history.state || {}), key: Math.random().toString(36).slice(2, 10) };
+      if (Number.isInteger(hist.idx)) hist.idx += 1;
+      window.history.pushState(hist, '', dest);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: hist }));
       return true;
     }
     return false;
@@ -551,8 +516,7 @@
 
   function findQueueMenuItem(job) {
     const menus = document.querySelectorAll('[role="menu"]');
-    const last = menus[menus.length - 1];
-    // сначала — валидируем, что меню от нашего трека (в шапке меню есть ссылка highlight)
+    // validated first: the menu must belong to our track (highlight link in its header)
     for (const menu of menus) {
       let owns = false;
       for (const l of menu.querySelectorAll('a[href]')) {
@@ -573,11 +537,10 @@
         if (P.matchAddToQueue(b.textContent || b.getAttribute('aria-label') || '')) return b;
       }
     }
-    // фолбэк: любое открытое меню, первое подходящее название
+    // fallback: any open menu, first matching label
     for (const b of document.querySelectorAll('[role="menu"] button, [role="menu"] [role="menuitem"]')) {
       if (P.matchAddToQueue(b.textContent || b.getAttribute('aria-label') || '')) return b;
     }
-    void last;
     return null;
   }
 
@@ -585,9 +548,7 @@
     try {
       const moreBtns = document.querySelectorAll('button[data-testid="more-button"]').length;
       const links = document.querySelectorAll('main a[href*="/track/"]').length;
-      log(
-        'диагностика: кнопок «⋮»=' + moreBtns + ', ссылок на треки=' + links + ', путь=' + location.pathname.slice(0, 48),
-      );
+      log('diagnostics: more-buttons=' + moreBtns + ', track-links=' + links + ', path=' + location.pathname.slice(0, 48));
     } catch (e) {
       /* ignore */
     }
@@ -597,25 +558,25 @@
     try {
       const menus = document.querySelectorAll('[role="menu"]');
       if (!menus.length) {
-        log('✗ меню не открылось вовсе');
+        log('the menu did not open at all');
         return;
       }
       const texts = Array.from(menus[menus.length - 1].querySelectorAll('button, [role="menuitem"]'))
         .slice(0, 12)
         .map((b) => (b.textContent || '').trim().slice(0, 32))
         .filter(Boolean);
-      log('✗ «Добавить в очередь» не найдено; пункты меню: ' + texts.join(' | ').slice(0, 300));
+      log('"Add to queue" not found; menu items: ' + texts.join(' | ').slice(0, 300));
     } catch (e) {
-      log('✗ меню не разобрано');
+      log('menu could not be parsed');
     }
   }
 
   async function addTrackToQueueUI(job) {
-    // Путь 1 (основной): поиск по названию, точное совпадение ID в ссылке
+    // Path 1 (main): search with an exact ID match
     let ok = await queueViaSearch(job);
-    // Путь 2: страница трека
+    // Path 2: the track page
     if (!ok) {
-      log('ℹ поиск не сработал — пробуем страницу трека');
+      log('search path failed — trying the track page');
       ok = await queueViaTrackPage(job);
     }
     if (!ok) dumpDiagnostics();
@@ -626,9 +587,9 @@
     const startHref = location.href;
     const startKey = window.history.state && window.history.state.key;
     const q = encodeURIComponent(((job.title || '') + ' ' + (job.artist || '')).trim() || job.trackId);
-    log('шаг: ищем трек в Spotify (поиск /tracks)');
+    log('step: searching the track in Spotify (/tracks)');
     navigateSpaTo('/search/' + q + '/tracks');
-    // если pushState не заставил приложение перейти — кликаем ссылку
+    // if pushState did not move the app — click a link
     await sleep(300);
     if (!location.pathname.startsWith('/search')) {
       const a = document.createElement('a');
@@ -640,7 +601,7 @@
     }
     const arrived = await waitFor(() => location.pathname.startsWith('/search'), 5000);
     if (!arrived) {
-      log('✗ не открылась страница поиска');
+      log('the search page did not open');
       return false;
     }
     await sleep(1000);
@@ -648,22 +609,22 @@
     const linkSel = 'main [data-testid="infinite-scroll-list"] a[href*="/track/' + job.trackId + '"]';
     const link = await waitFor(() => document.querySelector(linkSel) || findTrackLinkLoose(job), 8000);
     if (!link) {
-      log('✗ точный трек не найден в результатах поиска');
+      log('the exact track was not found in the search results');
       return false;
     }
-    log('шаг: нашли точный трек в результатах');
+    log('step: exact track found in the results');
 
     const row = link.closest('[data-testid="tracklist-row"], [role="row"], [data-testid="entityRow"]');
     let more = (row && row.querySelector('button[data-testid="more-button"]')) || null;
     if (!more) more = findMoreInRowNear(link);
     if (!more) more = await waitFor(findMoreButtonGlobal, 2500);
     if (!more) {
-      log('✗ у строки трека не нашли кнопку «⋮»');
+      log('the "⋮" button was not found next to the track row');
       return false;
     }
 
     click(more);
-    log('шаг: открыли меню трека');
+    log('step: opened the track menu');
     const item = await waitFor(() => findQueueMenuItem(job), 4500);
     if (!item) {
       dumpMenuTexts();
@@ -672,14 +633,14 @@
       return false;
     }
     click(item);
-    log('шаг: нажали «Добавить в очередь»');
+    log('step: clicked "Add to queue"');
     await sleep(400);
     pressEscape();
     pressEscape();
 
     if (location.href !== startHref && window.history.state && window.history.state.key === startKey) {
       history.back();
-      log('шаг: вернули прежний вид');
+      log('step: restored the previous view');
     }
     return true;
   }
@@ -696,11 +657,11 @@
     a.remove();
     const ok = await waitFor(() => location.pathname.indexOf('/track/' + job.trackId) >= 0, 5000);
     if (!ok) {
-      log('✗ не открылась страница трека');
+      log('the track page did not open');
       return false;
     }
     await sleep(1200);
-    log('шаг: открыли страницу трека');
+    log('step: opened the track page');
 
     let more = await waitFor(findMoreButtonGlobal, 5000);
     if (!more) {
@@ -711,12 +672,12 @@
       if (titleLink) more = findMoreInRowNear(titleLink) || findMoreInRowNear(titleLink.parentElement || titleLink);
     }
     if (!more) {
-      log('✗ на странице трека не нашли кнопку «…»');
+      log('the "⋮" button was not found on the track page');
       return false;
     }
 
     click(more);
-    log('шаг: открыли меню трека');
+    log('step: opened the track menu');
     const item = await waitFor(() => findQueueMenuItem(job), 4500);
     if (!item) {
       dumpMenuTexts();
@@ -725,14 +686,14 @@
       return false;
     }
     click(item);
-    log('шаг: нажали «Добавить в очередь»');
+    log('step: clicked "Add to queue"');
     await sleep(400);
     pressEscape();
     pressEscape();
 
     if (location.href !== startHref && window.history.state && window.history.state.key === startKey) {
       history.back();
-      log('шаг: вернули прежний вид');
+      log('step: restored the previous view');
     }
     return true;
   }
@@ -745,23 +706,23 @@
     persist();
     try {
       if (!job.title) await fetchMeta(job);
-      log('▶ ставим в очередь Spotify: ' + (job.title || job.trackId));
+      log('adding to the Spotify queue: ' + (job.title || job.trackId));
       const ok = await addTrackToQueueUI(job);
       if (ok) {
         pending.shift();
         const name = job.artist ? job.artist + ' - ' + job.title : job.title || job.url;
-        log('✓ добавлено в очередь Spotify: ' + name);
+        log('added to the Spotify queue: ' + name);
         void say('@' + job.by + ' Queued [' + name + ']');
       } else {
         job.attempts = (job.attempts || 0) + 1;
         if (job.attempts >= 3) {
           pending.shift();
-          log('✗ сдались: ' + (job.title || job.url));
+          log('giving up: ' + (job.title || job.url));
         }
         await sleep(4000);
       }
     } catch (e) {
-      log('✗ ошибка: ' + (e && e.message ? e.message : String(e)));
+      log('error: ' + (e && e.message ? e.message : String(e)));
     } finally {
       state.busy = false;
       persist();
@@ -769,57 +730,47 @@
     }
   }
 
-  // ---------- настройки ----------
-  function setChannel(ch) {
-    state.channel = String(ch || '')
-      .trim()
-      .toLowerCase();
-    chatDisconnect();
-    if (state.channel) {
-      stopped = true;
-      state.joinRequestedAt = Date.now();
-      chatConnect();
-      log('канал: #' + state.channel + ' — подключаемся…');
-    } else {
-      log('канал отключён');
-    }
-    persist();
-  }
-
+  // ---------- settings ----------
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.tq_channel) setChannel(changes.tq_channel.newValue || '');
     if (changes.tq_enabled) {
       state.enabled = Boolean(changes.tq_enabled.newValue);
-      log(state.enabled ? 'расширение включено' : 'расширение выключено');
-    }
-    if (changes.tq_twitch_client_id) {
-      tw.clientId = changes.tq_twitch_client_id.newValue || '';
+      log(state.enabled ? 'extension enabled' : 'extension disabled');
+      persist();
     }
     if ('tq_twitch_login_request' in changes) {
-      beginTwitchLogin().catch((e) => log('✗ вход в Twitch: ' + (e && e.message ? e.message : e)));
+      beginTwitchLogin().catch((e) => {
+        chrome.storage.local.set({ tq_device: { status: 'error', error: String(e && e.message ? e.message : e) } });
+      });
     }
     if (changes.tq_twitch_token && !changes.tq_twitch_token.newValue) {
-      // вышли из аккаунта из попапа (наш собственный logout уже сбросил tw)
-      if (tw.token || tw.nick) log('Twitch: аккаунт отключён');
+      // signed out from the popup
+      if (tw.token || tw.nick) log('Twitch: account disconnected');
       tw.token = null;
       tw.nick = null;
       tw.refresh = null;
-      restartChat();
+      state.channel = '';
+      chatDisconnect();
+      persist();
     }
     if (changes.tq_twitch_token && changes.tq_twitch_token.newValue && changes.tq_twitch_token.newValue !== tw.token) {
-      loadTwitchCreds(() => restartChat());
+      loadTwitchCreds(() => {
+        if (tw.nick) startChatForNick(tw.nick);
+      });
     }
   });
 
-  // ---------- старт ----------
+  // ---------- boot ----------
   loadTwitchCreds(() => {
-    chrome.storage.local.get(['tq_channel', 'tq_enabled', 'tq_events'], (r) => {
+    chrome.storage.local.get(['tq_enabled'], (r) => {
       state.enabled = r.tq_enabled !== false;
-      if (Array.isArray(r.tq_events)) state.events = r.tq_events;
-      log('расширение запущено на ' + location.host);
-      if (r.tq_channel) setChannel(r.tq_channel);
-      else persist();
+      log('content script started on ' + location.host);
+      if (tw.token && tw.nick) {
+        log('Twitch account present: @' + tw.nick);
+        startChatForNick(tw.nick);
+      } else {
+        persist();
+      }
     });
   });
 })();

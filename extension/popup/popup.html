@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <title>TuneQueue</title>
@@ -10,53 +10,36 @@
       <div class="logo">Tune<span>Queue</span></div>
       <div class="chips" id="chips"></div>
 
-      <label class="field">Twitch-канал</label>
-      <div class="row">
-        <input id="channel" placeholder="nick_канала" spellcheck="false" />
-        <button id="save">OK</button>
-      </div>
-
       <label class="switch">
-        <input type="checkbox" id="enabled" /> Расширение включено
+        <input type="checkbox" id="enabled" /> Extension enabled
       </label>
 
       <div class="twitch-box" id="twitch-box">
-        <div class="log-title">Twitch (чтобы отвечать в чате)</div>
+        <div class="log-title">Twitch</div>
         <div id="twitch-disconnected">
-          <div class="row">
-            <input id="client-id" placeholder="Client ID приложения Twitch" spellcheck="false" />
-            <button id="save-cid" class="ghost-btn">OK</button>
-          </div>
-          <button id="twitch-login" class="wide-btn">Подключить Twitch</button>
-          <div class="hint">
-            Бесплатно: создай приложение на
-            <a href="https://dev.twitch.tv/console/apps" target="_blank">dev.twitch.tv</a>
-            (Redirect URI: любой, например http://localhost) и вставь Client ID.
-          </div>
+          <button id="twitch-login" class="wide-btn">Authorize Twitch</button>
+          <div class="hint" id="twitch-error" hidden></div>
         </div>
         <div id="twitch-waiting" hidden>
           <div class="code" id="device-code"></div>
-          <button id="open-activate" class="wide-btn">Открыть страницу с кодом</button>
-          <div class="hint">Введи код там и подтверди — ждём…</div>
+          <button id="open-activate" class="wide-btn">Open activation page</button>
+          <div class="hint">Confirm the sign-in on the Twitch page — waiting…</div>
         </div>
         <div id="twitch-connected" hidden>
-          <div class="hint">Отвечаем от имени <b id="twitch-nick"></b></div>
-          <button id="twitch-logout" class="ghost-btn">Отключить аккаунт</button>
+          <div class="hint">Signed in as <b id="twitch-nick"></b></div>
+          <button id="twitch-logout" class="ghost-btn">Disconnect</button>
         </div>
       </div>
 
       <div class="cmds">
-        Зрители пишут в чат:<br />
-        <code>!sr https://open.spotify.com/track/…</code><br />
-        <span class="hint">после добавления бот отвечает: <b>@user Queued [трек]</b></span>
+        For it to work: the <b>open.spotify.com</b> tab must be open (it can stay
+        minimized). You can stream from the browser or the Spotify app — the queue is shared.
       </div>
 
-      <div class="log-title">События <span id="pending"></span></div>
-      <div class="log" id="log"></div>
-
-      <div class="hint">
-        Чтобы работало: вкладка <b>open.spotify.com</b> должна быть открыта (можно свёрнутую).
-        Стримить можно с браузера или из приложения Spotify — очередь общая.
+      <div class="cmds">
+        Viewers type in chat:<br />
+        <code>!sr https://open.spotify.com/track/…</code><br />
+        after adding, the bot replies: <b>@user Queued [track]</b>
       </div>
     </div>
     <script src="popup.js"></script>

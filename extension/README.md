@@ -1,77 +1,79 @@
-# TuneQueue — расширение для браузера 🎧
+# TuneQueue 🎧
 
-**Сонг-реквесты для Twitch на Spotify. Без API, без Premium, без подписок, без серверов.**
+**Twitch song requests on Spotify. No API keys, no Premium, no servers, no subscriptions.**
 
-Зритель пишет в чат Twitch `!sr <ссылка>` → расширение само находит трек в веб-плеере
-Spotify и нажимает его собственную кнопку **«Добавить в очередь»**. Трек играет там,
-где слушает стример — в браузере или в приложении Spotify (очередь общая для аккаунта).
+A viewer posts `!sr <link>` in Twitch chat → the extension finds the track in the
+open Spotify web player and clicks the native **“Add to queue”** button. The track plays
+wherever the streamer listens — in the browser or in the Spotify desktop app (the queue is
+shared across the account). After adding, the bot replies in chat:
+`@user Queued [Artist - Track]`.
 
-## Требования
+## Requirements
 
-- Chrome / Edge / Opera (Manifest V3) или Firefox.
-- **Открытая вкладка `open.spotify.com`** (можно свёрнутую — расширению не нужен фокус).
-- Premium **не нужен** — используется обычная кнопка «Добавить в очередь» из интерфейса.
+- Chrome / Edge / Opera (Manifest V3) or Firefox.
+- The **open.spotify.com tab must stay open** (it can stay minimized — no focus stealing).
+- Spotify Premium is **not** needed — the regular “Add to queue” button is free.
 
-## Установка (1 минута)
+## Install
 
-1. Распакуй архив с расширением.
-2. Открой `chrome://extensions` (в Edge — `edge://extensions`).
-3. Включи **Режим разработчика**.
-4. Нажми **Загрузить распакованное расширение** → выбери папку `extension`.
+1. Unpack the release archive.
+2. Open `chrome://extensions` (Edge: `edge://extensions`).
+3. Enable **Developer mode**.
+4. **Load unpacked** → select the `extension` folder.
 
-Firefox: `about:debugging#/runtime/this-firefox` → «Загрузить временное дополнение» → выбери `manifest.json`.
+Firefox: `about:debugging#/runtime/this-firefox` → “Load Temporary Add-on…” → pick `manifest.json`.
 
-## Использование
+## One-time setup: Twitch application
 
-1. Открой вкладку **open.spotify.com** (залогинен аккаунт стримера) и не закрывай её.
-2. Кликни в иконку расширения → введи **ник Twitch-канала** → OK.
-3. **Чтобы бот отвечал в чате** (рекомендуется): подключи Twitch —
-   создай бесплатное приложение на [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps)
-   (Redirect URI: любой, например `http://localhost`), вставь **Client ID** в попап →
-   «Подключить Twitch» → введи код на странице Twitch. Теперь после заказа в чате
-   появляется: **`@user Queued [Artist — Track]`** (от имени твоего аккаунта).
-   Без подключения всё добавляется, просто без ответов в чате.
-4. Плашки: «бот в чате» = готово. Всё.
-5. Зрители пишут в чат:
-   - `!sr https://open.spotify.com/track/…` (работают также `!play`, `!songrequest`,
-     ссылки `[x](x)`, `spotify:track:…`, короткие `spotify.link/…`)
+Twitch sign-in requires a (free) application of your own — it takes 2 minutes, once:
 
-Как добавляется: расширение открывает страницу трека → меню «⋮» → **«Добавить в очередь»**
-(обычные клики по интерфейсу Spotify; если страница трека не подошла — фолбэк через поиск).
-В попапе — живой лог: каждая команда и каждый шаг. Если Spotify обновит интерфейс —
-в логе будет видно, на каком шаге, и по нему быстро поправим селекторы
-(списки кандидатов — в `content.js`, функция `MORE_BTN_SEL`).
+1. Go to [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) → **Register Your Application**
+   (Name: anything, e.g. `TuneQueue`; OAuth Redirect URL: any value, e.g. `https://localhost` —
+   it is not used by the sign-in method).
+2. Copy the **Client ID** and paste it into `extension/config.js`:
+   ```js
+   window.TQ_TWITCH_CLIENT_ID = 'ваш_client_id';
+   ```
+3. Reload the extension on the extensions page.
 
-## Как это устроено
+## Usage
+
+1. Keep the **open.spotify.com** tab open (logged in to the streamer’s account).
+2. Click the extension icon → **Authorize Twitch** → confirm on the Twitch page
+   (“TuneQueue wants to access your account”). The bot joins your chat automatically.
+3. Viewers request tracks:
+   - `!sr https://open.spotify.com/track/…`
+     (also `!play`, `!songrequest`, markdown `[x](x)`, `spotify:track:…`, short `spotify.link/…`)
+4. The bot answers in chat: `@user Queued [Artist - Track]`.
+
+Status in the popup: **bot in chat #yourname** — ready. Cooldown: 15 s per viewer;
+requests are processed strictly in order.
+
+## How it works
 
 ```
-Чат Twitch ──WebSocket──► content script (во вкладке open.spotify.com)
-                              │  !sr <ссылка>
+Twitch chat ──WebSocket──► content script (inside the open.spotify.com tab)
+                              │  !sr <link>
                               ▼
-                    Поиск трека → меню «⋮» → «Добавить в очередь»
-                              │  (обычные клики по интерфейсу Spotify)
+              Search /tracks → exact track by ID → “⋮” → “Add to queue”
+                              │  (ordinary clicks on Spotify's own UI)
                               ▼
-                    Очередь аккаунта Spotify → играет любое устройство
+                 Account queue → plays on any device
 ```
 
-- Никаких серверов и ключей: чат читается анонимно (justinfan), API Spotify не вызываются.
-- Автоматизация работает в **фоновой вкладке** — окно/игру не поднимает и не крадёт фокус.
-- Кулдаун: 15 секунд на пользователя; команды из очереди расширения ставятся строго по порядку.
+- No servers and no keys: chat uses a read/write OAuth token stored locally in the browser.
+- Automation runs in a **background tab** — never raises a window or steals focus.
+- If Spotify updates its interface, extend the selector candidate lists in `content.js`
+  (`MORE_BTN_SEL` and friends) — the code logs each step to the browser console.
 
-## Ограничения
-
-- Интерфейс Spotify периодически меняется — при поломке лог в попапе покажет шаг.
-- Молчит в чате (ответы бота — в планах, нужен бесплатный Twitch-токен).
-- Ответы/скип — как обычно: управляет сам стример в своём плеере.
-
-## Разработка
+## Development
 
 ```bash
-node --test tests/     # тесты разбора команд
+node --test tests/     # command parsing tests
 ```
 
-Код без сборки: `manifest.json`, `content.js`, `lib/parse.js`, `popup/`.
+Plain JS, no build step: `manifest.json`, `config.js`, `content.js`, `lib/parse.js`, `popup/`.
 
-## Лицензия
+## License
 
 MIT

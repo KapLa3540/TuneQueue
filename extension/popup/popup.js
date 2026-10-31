@@ -1,53 +1,34 @@
-/* TuneQueue popup: настройки, вход Twitch, лог событий. */
+/* TuneQueue popup: status, enable switch, Twitch authorize. */
 (() => {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const channelInput = $('channel');
   const enabledBox = $('enabled');
-  const clientInput = $('client-id');
 
   let device = null;
 
   const STATUS_TEXT = {
-    joined: ['ok', 'бот в чате'],
-    joining: ['warn', 'заходим в чат…'],
-    failed: ['bad', 'канал не найден?'],
-    none: ['warn', 'канал не задан'],
+    joined: ['ok', 'bot in chat'],
+    joining: ['warn', 'connecting to chat…'],
+    failed: ['bad', 'channel not found?'],
+    none: ['warn', 'not connected'],
   };
 
-  function render(status, events) {
+  function render(status) {
     const chips = $('chips');
     const st = status || {};
-    const [cls, text] = STATUS_TEXT[st.joinState || 'none'] || STATUS_TEXT.none;
-    let html =
-      '<span class="chip ' + cls + '">' + text + (st.channel ? ' #' + st.channel : '') + '</span>';
-    if (st.loggedIn && st.nick) html += '<span class="chip ok">@' + esc(st.nick) + '</span>';
-    else html += '<span class="chip warn">Twitch не подключён</span>';
-    if (st.busy) html += '<span class="chip warn">ставим трек…</span>';
-    if (st.pending) html += '<span class="chip warn">в очереди: ' + st.pending + '</span>';
+    let html = '';
+    if (st.loggedIn && st.nick) {
+      const [cls, text] = STATUS_TEXT[st.joinState || 'none'] || STATUS_TEXT.none;
+      html += '<span class="chip ' + cls + '">' + text + ' #' + esc(st.nick) + '</span>';
+    } else {
+      html += '<span class="chip warn">Twitch not connected</span>';
+    }
+    if (st.busy) html += '<span class="chip warn">adding track…</span>';
     chips.innerHTML = html;
 
-    if (document.activeElement !== channelInput) channelInput.value = st.channel || '';
-    if (document.activeElement !== clientInput) clientInput.value = st.clientId || clientInput.value;
     enabledBox.checked = st.enabled !== false;
-
     renderTwitch(st);
-
-    const log = $('log');
-    const list = (events || []).slice(-40).reverse();
-    log.innerHTML = list.length
-      ? list
-          .map(
-            (e) =>
-              '<div><span class="t">' +
-              new Date(e.t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
-              '</span>' +
-              esc(e.text) +
-              '</div>',
-          )
-          .join('')
-      : '<div>Пока пусто. Открой Spotify, задай канал — зрители пишут !sr в чат Twitch.</div>';
   }
 
   function renderTwitch(st) {
@@ -58,9 +39,12 @@
     $('twitch-connected').hidden = !logged;
     if (logged) $('twitch-nick').textContent = '@' + st.nick;
     if (waiting) $('device-code').textContent = device.user_code || '…';
-    if (device && device.status === 'error' && !logged) {
-      $('twitch-disconnected').querySelector('.hint').textContent =
-        'Ошибка: ' + (device.error || 'см. лог') + ' — попробуй ещё раз';
+    const errBox = $('twitch-error');
+    if (!logged && !waiting && device && device.status === 'error') {
+      errBox.hidden = false;
+      errBox.textContent = device.error || 'See the browser console';
+    } else {
+      errBox.hidden = true;
     }
   }
 
@@ -69,40 +53,39 @@
   }
 
   function refresh() {
-    chrome.storage.local.get(['tq_status', 'tq_events', 'tq_device', 'tq_twitch_client_id'], (r) => {
+    chrome.storage.local.get(['tq_status', 'tq_device'], (r) => {
       device = r.tq_device || null;
-      const status = { ...(r.tq_status || {}), clientId: r.tq_twitch_client_id || '' };
-      render(status, r.tq_events);
+      render(r.tq_status || {});
     });
   }
 
-  $('save').addEventListener('click', () => {
-    chrome.storage.local.set({ tq_channel: channelInput.value.trim().toLowerCase() });
-  });
-  channelInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') $('save').click();
-  });
   enabledBox.addEventListener('change', () => {
     chrome.storage.local.set({ tq_enabled: enabledBox.checked });
   });
 
-  $('save-cid').addEventListener('click', () => {
-    chrome.storage.local.set({ tq_twitch_client_id: clientInput.value.trim() });
-  });
-
   $('twitch-login').addEventListener('click', () => {
-    const cid = clientInput.value.trim();
-    if (!cid) {
-      alert('Сначала введи Client ID приложения Twitch');
-      return;
-    }
-    chrome.storage.local.set({ tq_twitch_client_id: cid, tq_twitch_login_request: Date.now() });
+    device = { status: 'waiting', user_code: '' };
+    renderTwitch({ loggedIn: false });
+    chrome.storage.local.set({ tq_twitch_login_request: Date.now() });
+    // open the activation page as soon as Twitch returns the URL
+    let tries = 0;
+    const t = setInterval(() => {
+      tries++;
+      chrome.storage.local.get('tq_device', (r) => {
+        const d = r.tq_device;
+        if (d && d.status === 'waiting' && d.verification_uri_complete) {
+          clearInterval(t);
+          chrome.tabs.create({ url: d.verification_uri_complete });
+        } else if (tries > 20 || (d && d.status === 'error')) {
+          clearInterval(t);
+        }
+      });
+    }, 500);
   });
 
   $('open-activate').addEventListener('click', () => {
-    if (device && device.verification_uri) {
-      chrome.tabs.create({ url: device.verification_uri });
-    }
+    const url = (device && (device.verification_uri_complete || device.verification_uri)) || 'https://www.twitch.tv/activate';
+    chrome.tabs.create({ url });
   });
 
   $('twitch-logout').addEventListener('click', () => {

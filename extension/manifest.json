@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "TuneQueue — song requests для Twitch",
-  "version": "0.1.0",
-  "description": "!sr в чате Twitch → трек в очередь Spotify через кнопку «Добавить в очередь». Без Premium, без подписок.",
+  "name": "TuneQueue",
+  "version": "0.2.0",
+  "description": "Song requests for Twitch: viewers post !sr <link> in chat, the track is added to Spotify's queue.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://irc-ws.chat.twitch.tv/*",
@@ -10,13 +15,6 @@
     "https://spotify.link/*",
     "https://id.twitch.tv/*",
     "https://api.twitch.tv/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["https://open.spotify.com/*"],
-      "js": ["lib/parse.js", "content.js"],
-      "run_at": "document_idle"
-    }
   ],
   "action": {
     "default_popup": "popup/popup.html",
@@ -27,9 +25,11 @@
       "128": "icons/icon128.png"
     }
   },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["lib/parse.js", "config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
