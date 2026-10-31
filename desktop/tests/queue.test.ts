@@ -19,6 +19,13 @@ test('parseSpotifyTrack: uri формат', () => {
   assert.equal(u?.trackId, '3n3Ppam7vgaVa1iaRUc9Lp');
 });
 
+test('parseSpotifyTrack: отрезает хвостовую пунктуацию', () => {
+  const a = parseSpotifyTrack('https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp).');
+  assert.equal(a?.trackId, '3n3Ppam7vgaVa1iaRUc9Lp');
+  const b = parseSpotifyTrack('(https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp)');
+  assert.equal(b, null); // открывающая скобка в начале — это не ссылка
+});
+
 test('parseSpotifyTrack: отвергает мусор и не-треки', () => {
   assert.equal(parseSpotifyTrack('дайфт панк один раз больше'), null);
   assert.equal(parseSpotifyTrack('https://open.spotify.com/album/3n3Ppam7vgaVa1iaRUc9Lp'), null);

@@ -10,7 +10,7 @@ export interface ParsedTrack {
 
 /** Принимаем только ссылки на трек Spotify (https://open.spotify.com/track/... или spotify:track:...). */
 export function parseSpotifyTrack(input: string): ParsedTrack | null {
-  const s = input.trim();
+  const s = input.trim().replace(/[),.;!?'"\]]+$/, '');
   const url = s.match(TRACK_URL_RE);
   if (url) {
     const trackId = url[1];

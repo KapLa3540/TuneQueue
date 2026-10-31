@@ -207,6 +207,27 @@ function render(): void {
               : ''
           }
         </section>
+
+        <section class="card wide">
+          <h2>События${s.events.length ? ` · ${s.events.length}` : ''}</h2>
+          <div class="events">
+            ${
+              s.events.length === 0
+                ? '<div class="hint">Пока пусто. Здесь видно: подключение к чату, входящие команды и причины отказов.</div>'
+                : [...s.events]
+                    .reverse()
+                    .map(
+                      (e) =>
+                        `<div><span class="ev-time">${new Date(e.t).toLocaleTimeString('ru-RU', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })}</span> ${esc(e.text)}</div>`,
+                    )
+                    .join('')
+            }
+          </div>
+        </section>
       </div>
 
       <div class="footer">TuneQueue · без Spotify API · без Premium · без подписок · open source (MIT)</div>

@@ -435,6 +435,27 @@ code {
   padding: 24px 0;
 }
 
+/* --- лог событий --- */
+
+.events {
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--muted);
+  user-select: text;
+}
+
+.events > div:first-child {
+  color: var(--text);
+}
+
+.ev-time {
+  color: #6b6b7a;
+  margin-right: 6px;
+}
+
 .footer {
   text-align: center;
   color: var(--muted);

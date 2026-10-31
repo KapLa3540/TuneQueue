@@ -5,12 +5,21 @@ import { TwitchChat } from './irc.js';
 import { TwitchAuth, refreshStoredToken } from './twitchAuth.js';
 import { QueueService, parseSpotifyTrack } from './queue.js';
 import { fetchTrackMeta } from './oembed.js';
+import { isSpotifyShortLink, resolveShortLink } from './shortlink.js';
 import { createPlayer } from './player/windows.js';
 import { ServingController } from './serving.js';
 import type { AppState, Action, ActionResult, ChatState, PlayerState, AuthState } from '../shared/types.js';
 import { IPC } from '../shared/types.js';
 
 const isDev = !app.isPackaged;
+
+// ---------- лог событий для UI (последние 40) ----------
+const events: { t: number; text: string }[] = [];
+function logEvent(text: string): void {
+  events.push({ t: Date.now(), text });
+  if (events.length > 40) events.shift();
+  bump();
+}
 
 // ---------- состояние ----------
 const store = new Store();
@@ -67,15 +76,18 @@ const chat = new TwitchChat(
     onConnected: (c) => {
       chatState = { ...chatState, connected: c, channel: store.cfg.channel };
       if (!c) chatState = { ...chatState, joined: false };
+      logEvent(c ? `чат: подключились к Twitch (#${store.cfg.channel})` : 'чат: отключились');
       bump();
     },
     onJoined: (j) => {
       chatState = { ...chatState, joined: j };
+      logEvent(j ? `бот вошёл в #${store.cfg.channel}` : `бот вышел из #${store.cfg.channel}`);
       bump();
     },
     onAuthError: () => {
       store.update({ twitchToken: null, twitchRefresh: null, twitchNick: null });
       chatState = { ...chatState, loggedIn: false, nick: null, error: 'Токен Twitch истёк — войди заново' };
+      logEvent('⚠ токен Twitch истёк');
       restartChat();
       bump();
     },
@@ -89,27 +101,54 @@ function restartChat(): void {
 }
 
 // ---------- команды в чате ----------
+const KNOWN_CMDS = new Set(['sr', 'play', 'songrequest']);
+
 async function handleChat(user: string, text: string, _tags: Record<string, string>): Promise<void> {
   const t = text.trim();
-  const cmd = t.match(/^!(sr|play)\b\s*(\S*)/i);
-  if (!cmd) return;
-  const arg = cmd[2] ?? '';
+  if (!t.startsWith('!')) return;
 
-  if (!arg) {
-    chat.say(`${user}, используй: !sr <ссылка на трек Spotify>`);
+  const m = t.match(/^!(\S+)(?:\s+(\S+))?/);
+  if (!m) return;
+  const rawName = m[1];
+  const name = rawName.toLowerCase().replace(/[^a-z]/g, '');
+  const arg = (m[2] ?? '').trim();
+
+  if (!KNOWN_CMDS.has(name)) {
+    // отмечаем любые !-команды, чтобы было видно, что чат до нас доходит
+    logEvent(`@${user} написал ${rawName.slice(0, 20)}`);
     return;
   }
 
-  const parsed = parseSpotifyTrack(arg);
+  logEvent(`@${user}: !${name} ${arg.slice(0, 70)}`.trim());
+
+  if (!arg) {
+    chat.say(`${user}, используй: !sr <ссылка на трек Spotify>`);
+    logEvent('→ отказ: не указана ссылка');
+    return;
+  }
+
+  let parsed = parseSpotifyTrack(arg);
+  if (!parsed && isSpotifyShortLink(arg)) {
+    logEvent('пробуем разрешить короткую ссылку spotify.link…');
+    parsed = await resolveShortLink(arg);
+    if (parsed) logEvent(`короткая ссылка → track/${parsed.trackId}`);
+    else logEvent('→ отказ: короткая ссылка не открылась');
+  }
+
   if (!parsed) {
     chat.say(`${user}, нужна ссылка на трек: open.spotify.com/track/...`);
+    if (store.cfg.notify && Notification.isSupported()) {
+      new Notification({ title: 'TuneQueue', body: `❌ ${user}: нужна ссылка на трек Spotify` }).show();
+    }
+    logEvent(`→ отказ: «${arg.slice(0, 50)}» — не ссылка на трек`);
     return;
   }
 
   const res = queue.add(parsed, user, store.cfg.channel);
   if (!res.ok || !res.item) {
     if (res.reason === 'full') chat.say(`${user}, очередь полна`);
-    return; // cooldown — молчим, чтобы не спамить
+    logEvent(res.reason === 'cooldown' ? '→ кулдаун, пропущено' : '→ очередь полна');
+    return; // cooldown — молчим в чате, но в лог пишем
   }
 
   const item = res.item;
@@ -126,6 +165,7 @@ async function handleChat(user: string, text: string, _tags: Record<string, stri
   if (store.cfg.notify && Notification.isSupported()) {
     new Notification({ title: 'TuneQueue', body: `🔔 ${user} запросил трек` }).show();
   }
+  logEvent(`✓ принято: ${user} → track/${item.trackId} (в очереди ${n})`);
   bump();
 }
 
@@ -170,6 +210,7 @@ function snapshot(): AppState {
     auth: authState(),
     queue: queue.all(),
     notice,
+    events: [...events],
   };
 }
 

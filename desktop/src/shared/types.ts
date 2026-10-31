@@ -64,6 +64,7 @@ export interface AppState {
   auth: AuthState;
   queue: QueueItem[];
   notice: string | null;
+  events: { t: number; text: string }[];
 }
 
 export type Action =
