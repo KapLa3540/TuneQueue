@@ -24,6 +24,18 @@ export function parseSpotifyTrack(input: string): ParsedTrack | null {
   return null;
 }
 
+const TRACK_URL_ANY_RE = /https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/([A-Za-z0-9]{22})/i;
+const TRACK_URI_ANY_RE = /spotify:track:([A-Za-z0-9]{22})/i;
+
+/** Найти ссылку/URI на трек ВНУТРИ любого текста (markdown [x](x), двоеточия, лишние слова). */
+export function extractSpotifyTrack(text: string): ParsedTrack | null {
+  const u = text.match(TRACK_URL_ANY_RE);
+  if (u) return { trackId: u[1], url: `https://open.spotify.com/track/${u[1]}` };
+  const uri = text.match(TRACK_URI_ANY_RE);
+  if (uri) return { trackId: uri[1], url: `https://open.spotify.com/track/${uri[1]}` };
+  return null;
+}
+
 export const COOLDOWN_MS = 15_000;
 export const MAX_ACTIVE = 100;
 

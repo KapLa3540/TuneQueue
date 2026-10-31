@@ -3,7 +3,7 @@ import path from 'path';
 import { Store } from './store.js';
 import { TwitchChat } from './irc.js';
 import { TwitchAuth, refreshStoredToken } from './twitchAuth.js';
-import { QueueService, parseSpotifyTrack } from './queue.js';
+import { QueueService, extractSpotifyTrack } from './queue.js';
 import { fetchTrackMeta } from './oembed.js';
 import { isSpotifyShortLink, resolveShortLink } from './shortlink.js';
 import { createPlayer } from './player/windows.js';
@@ -104,17 +104,18 @@ function restartChat(): void {
 const KNOWN_CMDS = new Set(['sr', 'play', 'songrequest']);
 
 async function handleChat(user: string, text: string, _tags: Record<string, string>): Promise<void> {
-  const t = text.trim();
+  let t = text.trim();
   if (store.cfg.debugChat) {
     logEvent(`чат: @${user}: ${t.slice(0, 70)}`);
   }
+  // некоторые клиенты добавляют : или маркеры в начале — срезаем
+  t = t.replace(/^[:\s»>|-]+/, '');
   if (!t.startsWith('!')) return;
 
-  const m = t.match(/^!(\S+)(?:\s+(\S+))?/);
+  const m = t.match(/^!(\S+)/);
   if (!m) return;
   const rawName = m[1];
   const name = rawName.toLowerCase().replace(/[^a-z]/g, '');
-  const arg = (m[2] ?? '').trim();
 
   if (!KNOWN_CMDS.has(name)) {
     // отмечаем любые !-команды, чтобы было видно, что чат до нас доходит
@@ -122,20 +123,27 @@ async function handleChat(user: string, text: string, _tags: Record<string, stri
     return;
   }
 
-  logEvent(`@${user}: !${name} ${arg.slice(0, 70)}`.trim());
+  const rest = t.slice(m[0].length).trim();
+  logEvent(`@${user}: !${name} ${rest.slice(0, 60)}`.trim());
 
-  if (!arg) {
+  if (!rest) {
     chat.say(`${user}, используй: !sr <ссылка на трек Spotify>`);
     logEvent('→ отказ: не указана ссылка');
     return;
   }
 
-  let parsed = parseSpotifyTrack(arg);
-  if (!parsed && isSpotifyShortLink(arg)) {
-    logEvent('пробуем разрешить короткую ссылку spotify.link…');
-    parsed = await resolveShortLink(arg);
-    if (parsed) logEvent(`короткая ссылка → track/${parsed.trackId}`);
-    else logEvent('→ отказ: короткая ссылка не открылась');
+  // 1) ссылка/URI где угодно в тексте (в т.ч. markdown [x](x))
+  let parsed = extractSpotifyTrack(rest);
+
+  // 2) короткая ссылка spotify.link
+  if (!parsed) {
+    const urlTok = (rest.match(/https?:\/\/\S+/)?.[0] ?? '').replace(/[),.;!?'"\]]+$/, '');
+    if (urlTok && isSpotifyShortLink(urlTok)) {
+      logEvent('пробуем разрешить короткую ссылку spotify.link…');
+      parsed = await resolveShortLink(urlTok);
+      if (parsed) logEvent(`короткая ссылка → track/${parsed.trackId}`);
+      else logEvent('→ отказ: короткая ссылка не открылась');
+    }
   }
 
   if (!parsed) {
@@ -143,7 +151,7 @@ async function handleChat(user: string, text: string, _tags: Record<string, stri
     if (store.cfg.notify && Notification.isSupported()) {
       new Notification({ title: 'TuneQueue', body: `❌ ${user}: нужна ссылка на трек Spotify` }).show();
     }
-    logEvent(`→ отказ: «${arg.slice(0, 50)}» — не ссылка на трек`);
+    logEvent(`→ отказ: «${rest.slice(0, 50)}» — не ссылка на трек`);
     return;
   }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSpotifyTrack, QueueService, COOLDOWN_MS, MAX_ACTIVE } from '../src/main/queue.js';
+import { parseSpotifyTrack, extractSpotifyTrack, QueueService, COOLDOWN_MS, MAX_ACTIVE } from '../src/main/queue.js';
 
 test('parseSpotifyTrack: обычные ссылки', () => {
   const a = parseSpotifyTrack('https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp');
@@ -17,6 +17,27 @@ test('parseSpotifyTrack: обычные ссылки', () => {
 test('parseSpotifyTrack: uri формат', () => {
   const u = parseSpotifyTrack('spotify:track:3n3Ppam7vgaVa1iaRUc9Lp');
   assert.equal(u?.trackId, '3n3Ppam7vgaVa1iaRUc9Lp');
+});
+
+test('extractSpotifyTrack: ссылка внутри markdown и текста', () => {
+  assert.equal(
+    extractSpotifyTrack('[https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp?si=x](https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp?si=x)')?.trackId,
+    '3n3Ppam7vgaVa1iaRUc9Lp',
+  );
+  assert.equal(
+    extractSpotifyTrack('послушай spotify:track:3n3Ppam7vgaVa1iaRUc9Lp круто')?.trackId,
+    '3n3Ppam7vgaVa1iaRUc9Lp',
+  );
+  assert.equal(extractSpotifyTrack('просто текст без ссылки'), null);
+});
+
+test('extractSpotifyTrack: реальный кейс из чата пользователя', () => {
+  const raw = ':!sr [https://open.spotify.com/track/2dPYZ5QUwOeWeVc50s9CAU?si=abb55962](https://open.spotify.com/track/2dPYZ5QUwOeWeVc50s9CAU?si=abb55962)';
+  // эмуляция handleChat: срез двоеточия → команда → остаток → extract
+  const t = raw.trim().replace(/^[:\s»>|-]+/, '');
+  assert.ok(t.startsWith('!sr'));
+  const rest = t.replace(/^!\S+/, '').trim();
+  assert.equal(extractSpotifyTrack(rest)?.trackId, '2dPYZ5QUwOeWeVc50s9CAU');
 });
 
 test('parseSpotifyTrack: отрезает хвостовую пунктуацию', () => {
