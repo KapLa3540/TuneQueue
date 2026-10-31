@@ -1,0 +1,175 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e0e12;
+  --card: #17171d;
+  --text: #ececf1;
+  --muted: #9a9aa8;
+  --line: #2a2a35;
+  --green: #1db954;
+  --purple: #9147ff;
+  --amber: #e2b93d;
+  --red: #e0465a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  width: 380px;
+}
+
+.wrap {
+  padding: 14px;
+}
+
+.logo {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.logo span {
+  color: var(--green);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+.chip {
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.chip.ok {
+  border-color: rgba(29, 185, 84, 0.6);
+  color: #6ee7a0;
+}
+
+.chip.warn {
+  border-color: rgba(226, 185, 61, 0.6);
+  color: var(--amber);
+}
+
+.chip.bad {
+  border-color: rgba(224, 70, 90, 0.6);
+  color: #ff9aa8;
+}
+
+.field {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  margin: 5px 0 10px;
+}
+
+input[type='text'],
+#channel {
+  flex: 1;
+  min-width: 0;
+  background: #1e1e26;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13.5px;
+  outline: none;
+}
+
+#channel:focus {
+  border-color: var(--purple);
+}
+
+button {
+  background: var(--purple);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 8px 13px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover {
+  filter: brightness(1.12);
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.switch input {
+  accent-color: var(--green);
+}
+
+.cmds {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+code {
+  background: #1e1e26;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: #9ef0c0;
+  font-size: 11.5px;
+}
+
+.log-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.log {
+  max-height: 170px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--muted);
+  user-select: text;
+}
+
+.log .t {
+  color: #6b6b7a;
+  margin-right: 5px;
+}
+
+.hint {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.hint b {
+  color: var(--text);
+}

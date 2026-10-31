@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>TuneQueue</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="logo">Tune<span>Queue</span></div>
+      <div class="chips" id="chips"></div>
+
+      <label class="field">Twitch-канал</label>
+      <div class="row">
+        <input id="channel" placeholder="nick_канала" spellcheck="false" />
+        <button id="save">OK</button>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" id="enabled" /> Расширение включено
+      </label>
+
+      <div class="cmds">
+        Зрители пишут в чат:<br />
+        <code>!sr https://open.spotify.com/track/…</code>
+      </div>
+
+      <div class="log-title">События <span id="pending"></span></div>
+      <div class="log" id="log"></div>
+
+      <div class="hint">
+        Чтобы работало: вкладка <b>open.spotify.com</b> должна быть открыта (можно свёрнутую).
+        Стримить можно с браузера или из приложения Spotify — очередь общая.
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
