@@ -59,6 +59,7 @@ export interface AppState {
   channel: string;
   autoplay: boolean;
   notify: boolean;
+  debugChat: boolean;
   chat: ChatState;
   player: PlayerState;
   auth: AuthState;
@@ -72,6 +73,7 @@ export type Action =
   | { type: 'disconnect' }
   | { type: 'setAutoplay'; on: boolean }
   | { type: 'setNotify'; on: boolean }
+  | { type: 'setDebug'; on: boolean }
   | { type: 'removeItem'; id: number }
   | { type: 'clearFinished' }
   | { type: 'clearQueue' }

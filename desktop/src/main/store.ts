@@ -6,6 +6,7 @@ export interface Config {
   channel: string;
   autoplay: boolean;
   notify: boolean;
+  debugChat: boolean;
   twitchClientId: string;
   twitchToken: string | null;
   twitchRefresh: string | null;
@@ -17,6 +18,7 @@ export const defaultConfig = (): Config => ({
   channel: '',
   autoplay: true,
   notify: true,
+  debugChat: false,
   twitchClientId: '',
   twitchToken: null,
   twitchRefresh: null,

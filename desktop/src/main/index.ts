@@ -105,6 +105,9 @@ const KNOWN_CMDS = new Set(['sr', 'play', 'songrequest']);
 
 async function handleChat(user: string, text: string, _tags: Record<string, string>): Promise<void> {
   const t = text.trim();
+  if (store.cfg.debugChat) {
+    logEvent(`чат: @${user}: ${t.slice(0, 70)}`);
+  }
   if (!t.startsWith('!')) return;
 
   const m = t.match(/^!(\S+)(?:\s+(\S+))?/);
@@ -205,6 +208,7 @@ function snapshot(): AppState {
     channel: store.cfg.channel,
     autoplay: store.cfg.autoplay,
     notify: store.cfg.notify,
+    debugChat: store.cfg.debugChat,
     chat: chatState,
     player: playerState(),
     auth: authState(),
@@ -253,6 +257,11 @@ async function runAction(action: Action): Promise<ActionResult> {
       return { ok: true };
     case 'setNotify':
       store.update({ notify: action.on });
+      bump();
+      return { ok: true };
+    case 'setDebug':
+      store.update({ debugChat: action.on });
+      logEvent(action.on ? 'отладка чата включена' : 'отладка чата выключена');
       bump();
       return { ok: true };
     case 'removeItem':
@@ -355,11 +364,24 @@ function createTray(): void {
 }
 
 // ---------- bootstrap ----------
+// один экземпляр: второй запуск просто поднимает окно первого
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (win) {
+      win.show();
+      win.focus();
+    }
+  });
+}
+
 ipcMain.handle(IPC.getState, () => snapshot());
 ipcMain.handle(IPC.action, (_e, action: Action) => runAction(action));
 
 app.whenReady().then(async () => {
   console.log('[tq] TuneQueue запускается…');
+  logEvent('приложение запущено');
   createWindow();
   createTray();
 

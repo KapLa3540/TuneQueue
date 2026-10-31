@@ -122,6 +122,10 @@ function render(): void {
             <input type="checkbox" id="notify" ${s.notify ? 'checked' : ''} />
             Уведомления о новых запросах
           </label>
+          <label class="switch">
+            <input type="checkbox" id="debug" ${s.debugChat ? 'checked' : ''} />
+            Отладка: показывать все сообщения чата в логе
+          </label>
         </section>
 
         <section class="card">
@@ -283,6 +287,9 @@ function bind(): void {
   });
   $('notify')?.addEventListener('change', (e) => {
     void act({ type: 'setNotify', on: (e.target as HTMLInputElement).checked });
+  });
+  $('debug')?.addEventListener('change', (e) => {
+    void act({ type: 'setDebug', on: (e.target as HTMLInputElement).checked });
   });
 
   $('save-cid')?.addEventListener('click', () => {
