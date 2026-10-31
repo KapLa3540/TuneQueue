@@ -43,7 +43,8 @@ Twitch sign-in requires a (free) application of your own — it takes 2 minutes,
    (“TuneQueue wants to access your account”). The bot joins your chat automatically.
 3. Viewers request tracks:
    - `!sr https://open.spotify.com/track/…`
-     (also `!play`, `!songrequest`, markdown `[x](x)`, `spotify:track:…`, short `spotify.link/…`)
+     (markdown `[x](x)` links, `spotify:track:…` URIs and short `spotify.link/…` links
+     are recognized as well)
 4. The bot answers in chat: `@user Queued [Artist - Track]`.
 
 Status in the popup: **bot in chat #yourname** — ready. Cooldown: 15 s per viewer;
