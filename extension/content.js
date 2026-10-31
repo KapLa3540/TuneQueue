@@ -105,39 +105,23 @@
     }
   }
 
-  /** Sign in with Twitch (device code flow, one button in the popup). */
-  let deviceGen = 0;
+  /** The popup requests the device code itself (works even without the Spotify tab).
+   *  The content script only polls for the token while the tab is alive. */
+  let pollingCode = '';
 
-  async function beginTwitchLogin() {
-    if (!CLIENT_ID) {
-      throw new Error('Twitch app Client ID is not set — see extension/config.js');
-    }
-    const res = await fetch('https://id.twitch.tv/oauth2/device', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: CLIENT_ID, scopes: 'chat:read chat:edit' }).toString(),
+  function maybeStartDevicePoll() {
+    chrome.storage.local.get('tq_device', (r) => {
+      const d = r.tq_device;
+      if (!d || d.status !== 'waiting' || !d.device_code) return;
+      if (pollingCode === d.device_code) return;
+      pollingCode = d.device_code;
+      void pollDevice(d);
     });
-    if (!res.ok) throw new Error('Twitch device endpoint: HTTP ' + res.status);
-    const info = await res.json();
-    const dev = {
-      user_code: info.user_code,
-      verification_uri: info.verification_uri,
-      verification_uri_complete: info.verification_uri_complete || info.verification_uri,
-      device_code: info.device_code,
-      interval: info.interval || 5,
-      expiresAt: Date.now() + (info.expires_in || 1800) * 1000,
-      status: 'waiting',
-    };
-    chrome.storage.local.set({ tq_device: dev });
-    log('Twitch: enter the code at ' + info.verification_uri);
-    const gen = ++deviceGen;
-    void pollDevice(dev, gen);
-    return dev;
   }
 
-  async function pollDevice(dev, gen) {
-    if (gen !== deviceGen) return;
+  async function pollDevice(dev) {
     if (Date.now() > dev.expiresAt) {
+      pollingCode = '';
       chrome.storage.local.set({ tq_device: { status: 'expired' } });
       log('Twitch: code expired');
       return;
@@ -157,21 +141,23 @@
       const msg = String(body.message || body.error || '').toLowerCase();
 
       if (msg.includes('authorization_pending') || res.status === 428) {
-        setTimeout(() => void pollDevice(dev, gen), Math.max(1, dev.interval) * 1000);
+        setTimeout(() => void pollDevice(dev), Math.max(1, dev.interval) * 1000);
         return;
       }
       if (msg.includes('slow_down')) {
         dev.interval = Math.max(1, dev.interval) + 5;
-        setTimeout(() => void pollDevice(dev, gen), dev.interval * 1000);
+        setTimeout(() => void pollDevice(dev), dev.interval * 1000);
         return;
       }
       if (!body.access_token) {
+        pollingCode = '';
         chrome.storage.local.set({ tq_device: { status: 'error', error: msg || 'HTTP ' + res.status } });
         log('Twitch login error: ' + (msg || res.status));
         return;
       }
 
       // success
+      pollingCode = '';
       tw.token = body.access_token;
       tw.refresh = body.refresh_token || null;
       tw.expires = body.expires_in ? Date.now() + body.expires_in * 1000 : 0;
@@ -184,6 +170,7 @@
       startChatForNick(nick);
       persist();
     } catch (e) {
+      pollingCode = '';
       chrome.storage.local.set({ tq_device: { status: 'error', error: String(e && e.message) } });
       log('Twitch login error: ' + (e && e.message ? e.message : e));
     }
@@ -738,10 +725,9 @@
       log(state.enabled ? 'extension enabled' : 'extension disabled');
       persist();
     }
-    if ('tq_twitch_login_request' in changes) {
-      beginTwitchLogin().catch((e) => {
-        chrome.storage.local.set({ tq_device: { status: 'error', error: String(e && e.message ? e.message : e) } });
-      });
+    if (changes.tq_device && changes.tq_device.newValue && changes.tq_device.newValue.status === 'waiting') {
+      // the popup just requested a device code — start polling for the token
+      maybeStartDevicePoll();
     }
     if (changes.tq_twitch_token && !changes.tq_twitch_token.newValue) {
       // signed out from the popup
@@ -764,7 +750,6 @@
   loadTwitchCreds(() => {
     chrome.storage.local.get(['tq_enabled'], (r) => {
       state.enabled = r.tq_enabled !== false;
-      chrome.storage.local.set({ tq_config: { clientIdSet: Boolean(CLIENT_ID) } });
       log('content script started on ' + location.host);
       if (tw.token && tw.nick) {
         log('Twitch account present: @' + tw.nick);
@@ -772,6 +757,7 @@
       } else {
         persist();
       }
+      maybeStartDevicePoll(); // catch a device code requested while the tab was loading
     });
   });
 })();

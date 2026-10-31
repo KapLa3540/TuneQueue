@@ -6,9 +6,7 @@
   const enabledBox = $('enabled');
 
   let device = null;
-  let configSet = null; // null = unknown (no fresh content script yet)
   let localError = '';
-  let loginRequestAt = 0;
   let openedForCode = ''; // activation tab opened for this user_code
 
   const STATUS_TEXT = {
@@ -44,20 +42,9 @@
     if (logged) $('twitch-nick').textContent = '@' + st.nick;
     if (waiting) $('device-code').textContent = device.user_code || '…';
 
-    // the request went out but nothing came back for 5s → stale Spotify tab
-    if (
-      !logged &&
-      !waiting &&
-      loginRequestAt &&
-      Date.now() - loginRequestAt > 5000 &&
-      (!device || !device.status || device.status !== 'error')
-    ) {
-      localError =
-        'The Spotify tab did not respond. Reload the open.spotify.com tab (and the extension), then try again.';
-    }
-
     const errBox = $('twitch-error');
-    const text = localError || (!logged && !waiting && device && device.status === 'error' ? device.error || 'See the browser console' : '');
+    const text =
+      localError || (!logged && !waiting && device && device.status === 'error' ? device.error || 'See the browser console' : '');
     if (!logged && text) {
       errBox.hidden = false;
       errBox.textContent = text;
@@ -71,21 +58,14 @@
   }
 
   function refresh() {
-    chrome.storage.local.get(['tq_status', 'tq_device', 'tq_config'], (r) => {
+    chrome.storage.local.get(['tq_status', 'tq_device'], (r) => {
       const stDev = r.tq_device || null;
-      // keep the locally-armed waiting panel until storage responds
       if (stDev) device = stDev;
-      else if (!loginRequestAt) device = null;
-      configSet = r.tq_config && typeof r.tq_config.clientIdSet === 'boolean' ? r.tq_config.clientIdSet : null;
-      if (device && device.status === 'waiting' && loginRequestAt && Date.now() - loginRequestAt > 4000) {
-        loginRequestAt = 0; // content script responded — stop the stale timer
-      }
-      if (device && (device.status === 'error' || device.status === 'done')) loginRequestAt = 0;
       render(r.tq_status || {});
 
-      // Twitch replied — open the activation page (it already contains the code)
+      // a flow started elsewhere (e.g. from a previous popup session) — offer the page
       const uri = device && device.status === 'waiting' && (device.verification_uri_complete || device.verification_uri);
-      if (uri && openedForCode !== device.user_code) {
+      if (uri && openedForCode !== device.user_code && device.user_code) {
         openedForCode = device.user_code;
         chrome.tabs.create({ url: uri });
       }
@@ -98,17 +78,50 @@
 
   $('twitch-login').addEventListener('click', () => {
     localError = '';
-    device = null;
-    if (configSet === false) {
+    const cid = (typeof globalThis !== 'undefined' && globalThis.TQ_TWITCH_CLIENT_ID) || '';
+    if (!cid) {
+      device = null;
       localError = 'Set the Twitch app Client ID in extension/config.js, then reload the extension.';
       renderTwitch({ loggedIn: false });
       return;
     }
-    loginRequestAt = Date.now();
+
+    // show the waiting panel immediately, then ask Twitch right from the popup
     device = { status: 'waiting', user_code: '' };
     openedForCode = '';
     renderTwitch({ loggedIn: false });
-    chrome.storage.local.set({ tq_device: null, tq_twitch_login_request: Date.now() });
+
+    fetch('https://id.twitch.tv/oauth2/device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: cid, scopes: 'chat:read chat:edit' }).toString(),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Twitch device endpoint: HTTP ' + res.status);
+        return res.json();
+      })
+      .then((info) => {
+        const dev = {
+          user_code: info.user_code,
+          verification_uri: info.verification_uri,
+          verification_uri_complete: info.verification_uri_complete || info.verification_uri,
+          device_code: info.device_code,
+          interval: info.interval || 5,
+          expiresAt: Date.now() + (info.expires_in || 1800) * 1000,
+          status: 'waiting',
+        };
+        device = dev;
+        renderTwitch({ loggedIn: false });
+        // save it: the content script (Spotify tab) picks it up and polls for the token
+        chrome.storage.local.set({ tq_device: dev });
+        // and open the activation page right away (the URL already contains the code)
+        openedForCode = dev.user_code;
+        chrome.tabs.create({ url: dev.verification_uri_complete || dev.verification_uri });
+      })
+      .catch((e) => {
+        device = { status: 'error', error: String(e && e.message ? e.message : e) };
+        renderTwitch({ loggedIn: false });
+      });
   });
 
   $('open-activate').addEventListener('click', () => {

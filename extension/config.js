@@ -6,3 +6,5 @@
  * 3. Reload the extension.
  */
 window.TQ_TWITCH_CLIENT_ID = 'a9zutwdcexvkeehffzgou0i3j63uel';
+/* Works in content scripts (window), the popup page and any other context: */
+globalThis.TQ_TWITCH_CLIENT_ID = window.TQ_TWITCH_CLIENT_ID;
