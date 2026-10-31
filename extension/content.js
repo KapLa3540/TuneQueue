@@ -764,6 +764,7 @@
   loadTwitchCreds(() => {
     chrome.storage.local.get(['tq_enabled'], (r) => {
       state.enabled = r.tq_enabled !== false;
+      chrome.storage.local.set({ tq_config: { clientIdSet: Boolean(CLIENT_ID) } });
       log('content script started on ' + location.host);
       if (tw.token && tw.nick) {
         log('Twitch account present: @' + tw.nick);

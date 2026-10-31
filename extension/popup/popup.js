@@ -6,6 +6,9 @@
   const enabledBox = $('enabled');
 
   let device = null;
+  let configSet = null; // null = unknown (no fresh content script yet)
+  let localError = '';
+  let loginRequestAt = 0;
 
   const STATUS_TEXT = {
     joined: ['ok', 'bot in chat'],
@@ -39,10 +42,24 @@
     $('twitch-connected').hidden = !logged;
     if (logged) $('twitch-nick').textContent = '@' + st.nick;
     if (waiting) $('device-code').textContent = device.user_code || '…';
+
+    // the request went out but nothing came back for 5s → stale Spotify tab
+    if (
+      !logged &&
+      !waiting &&
+      loginRequestAt &&
+      Date.now() - loginRequestAt > 5000 &&
+      (!device || !device.status || device.status !== 'error')
+    ) {
+      localError =
+        'The Spotify tab did not respond. Reload the open.spotify.com tab (and the extension), then try again.';
+    }
+
     const errBox = $('twitch-error');
-    if (!logged && !waiting && device && device.status === 'error') {
+    const text = localError || (!logged && !waiting && device && device.status === 'error' ? device.error || 'See the browser console' : '');
+    if (!logged && text) {
       errBox.hidden = false;
-      errBox.textContent = device.error || 'See the browser console';
+      errBox.textContent = text;
     } else {
       errBox.hidden = true;
     }
@@ -53,8 +70,16 @@
   }
 
   function refresh() {
-    chrome.storage.local.get(['tq_status', 'tq_device'], (r) => {
-      device = r.tq_device || null;
+    chrome.storage.local.get(['tq_status', 'tq_device', 'tq_config'], (r) => {
+      const stDev = r.tq_device || null;
+      // keep the locally-armed waiting panel until storage responds
+      if (stDev) device = stDev;
+      else if (!loginRequestAt) device = null;
+      configSet = r.tq_config && typeof r.tq_config.clientIdSet === 'boolean' ? r.tq_config.clientIdSet : null;
+      if (device && device.status === 'waiting' && loginRequestAt && Date.now() - loginRequestAt > 4000) {
+        loginRequestAt = 0; // content script responded — stop the stale timer
+      }
+      if (device && (device.status === 'error' || device.status === 'done')) loginRequestAt = 0;
       render(r.tq_status || {});
     });
   }
@@ -64,9 +89,17 @@
   });
 
   $('twitch-login').addEventListener('click', () => {
+    localError = '';
+    device = null;
+    if (configSet === false) {
+      localError = 'Set the Twitch app Client ID in extension/config.js, then reload the extension.';
+      renderTwitch({ loggedIn: false });
+      return;
+    }
+    loginRequestAt = Date.now();
     device = { status: 'waiting', user_code: '' };
     renderTwitch({ loggedIn: false });
-    chrome.storage.local.set({ tq_twitch_login_request: Date.now() });
+    chrome.storage.local.set({ tq_device: null, tq_twitch_login_request: Date.now() });
     // open the activation page as soon as Twitch returns the URL
     let tries = 0;
     const t = setInterval(() => {
@@ -76,7 +109,7 @@
         if (d && d.status === 'waiting' && d.verification_uri_complete) {
           clearInterval(t);
           chrome.tabs.create({ url: d.verification_uri_complete });
-        } else if (tries > 20 || (d && d.status === 'error')) {
+        } else if (tries > 20 || (d && d.status === 'error' && d !== device)) {
           clearInterval(t);
         }
       });
