@@ -9,6 +9,7 @@
   let configSet = null; // null = unknown (no fresh content script yet)
   let localError = '';
   let loginRequestAt = 0;
+  let openedForCode = ''; // activation tab opened for this user_code
 
   const STATUS_TEXT = {
     joined: ['ok', 'bot in chat'],
@@ -81,6 +82,13 @@
       }
       if (device && (device.status === 'error' || device.status === 'done')) loginRequestAt = 0;
       render(r.tq_status || {});
+
+      // Twitch replied — open the activation page (it already contains the code)
+      const uri = device && device.status === 'waiting' && (device.verification_uri_complete || device.verification_uri);
+      if (uri && openedForCode !== device.user_code) {
+        openedForCode = device.user_code;
+        chrome.tabs.create({ url: uri });
+      }
     });
   }
 
@@ -98,22 +106,9 @@
     }
     loginRequestAt = Date.now();
     device = { status: 'waiting', user_code: '' };
+    openedForCode = '';
     renderTwitch({ loggedIn: false });
     chrome.storage.local.set({ tq_device: null, tq_twitch_login_request: Date.now() });
-    // open the activation page as soon as Twitch returns the URL
-    let tries = 0;
-    const t = setInterval(() => {
-      tries++;
-      chrome.storage.local.get('tq_device', (r) => {
-        const d = r.tq_device;
-        if (d && d.status === 'waiting' && d.verification_uri_complete) {
-          clearInterval(t);
-          chrome.tabs.create({ url: d.verification_uri_complete });
-        } else if (tries > 20 || (d && d.status === 'error' && d !== device)) {
-          clearInterval(t);
-        }
-      });
-    }, 500);
   });
 
   $('open-activate').addEventListener('click', () => {
