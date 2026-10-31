@@ -7,7 +7,9 @@
   "host_permissions": [
     "https://irc-ws.chat.twitch.tv/*",
     "https://open.spotify.com/*",
-    "https://spotify.link/*"
+    "https://spotify.link/*",
+    "https://id.twitch.tv/*",
+    "https://api.twitch.tv/*"
   ],
   "content_scripts": [
     {
