@@ -39,6 +39,9 @@ processed strictly in order.
 
 Tests: `node --test extension/tests/`
 
+## Possible issues 
+If when you press authorize only "..." appears without giving you code try to refresh your spotify browser page 
+
 ## License
 
 [MIT](LICENSE)
