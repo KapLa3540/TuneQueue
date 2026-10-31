@@ -511,42 +511,183 @@
     return null;
   }
 
-  async function addTrackToQueueUI(job) {
-    const startPath = location.pathname;
-
-    // Путь 1: страница трека (точнее всего — одна страница, один трек)
-    let more = await openTrackPage(job);
-
-    // Путь 2: поиск (если страница трека не дала кнопку)
-    if (!more) {
-      log('ℹ путь «страница трека» не сработал — пробуем поиск');
-      more = await openSearchPath(job);
+  /* Главный путь — как в проверенном open-source решении (oct'26):
+   * SPA-переход на /search/{запрос}/tracks → точный трек по ID в ссылке →
+   * кнопка [data-testid="more-button"] в его строке → меню [role="menu"] →
+   * пункт «Добавить в очередь» по тексту. */
+  function navigateSpaTo(pathWithQuery) {
+    const dest = pathWithQuery;
+    if (dest !== location.pathname + location.search + location.hash) {
+      const state = { ...(window.history.state || {}), key: Math.random().toString(36).slice(2, 10) };
+      if (Number.isInteger(state.idx)) state.idx += 1;
+      window.history.pushState(state, '', dest);
+      window.dispatchEvent(new PopStateEvent('popstate', { state }));
+      return true;
     }
-    if (!more) return false;
+    return false;
+  }
+
+  function findTrackLinkLoose(job) {
+    for (const link of document.querySelectorAll('main a[href*="/track/"]')) {
+      try {
+        if (new URL(link.href, location.origin).pathname === '/track/' + job.trackId) return link;
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    return null;
+  }
+
+  function findMoreInRowNear(link) {
+    let el = link;
+    for (let i = 0; i < 6 && el; i++) {
+      el = el.parentElement;
+      if (!el || !el.querySelector) break;
+      const btn = el.querySelector('button[data-testid="more-button"]');
+      if (btn) return btn;
+    }
+    return null;
+  }
+
+  function findQueueMenuItem(job) {
+    const menus = document.querySelectorAll('[role="menu"]');
+    const last = menus[menus.length - 1];
+    // сначала — валидируем, что меню от нашего трека (в шапке меню есть ссылка highlight)
+    for (const menu of menus) {
+      let owns = false;
+      for (const l of menu.querySelectorAll('a[href]')) {
+        try {
+          if (new URL(l.href, location.origin).searchParams.get('highlight') === 'spotify:track:' + job.trackId) {
+            owns = true;
+          }
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      if (!owns && job.title) {
+        const txt = menu.textContent || '';
+        if (txt.indexOf(job.title) >= 0) owns = true;
+      }
+      if (!owns) continue;
+      for (const b of menu.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]')) {
+        if (P.matchAddToQueue(b.textContent || b.getAttribute('aria-label') || '')) return b;
+      }
+    }
+    // фолбэк: любое открытое меню, первое подходящее название
+    for (const b of document.querySelectorAll('[role="menu"] button, [role="menu"] [role="menuitem"]')) {
+      if (P.matchAddToQueue(b.textContent || b.getAttribute('aria-label') || '')) return b;
+    }
+    void last;
+    return null;
+  }
+
+  function dumpDiagnostics() {
+    try {
+      const moreBtns = document.querySelectorAll('button[data-testid="more-button"]').length;
+      const links = document.querySelectorAll('main a[href*="/track/"]').length;
+      log(
+        'диагностика: кнопок «⋮»=' + moreBtns + ', ссылок на треки=' + links + ', путь=' + location.pathname.slice(0, 48),
+      );
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function dumpMenuTexts() {
+    try {
+      const menus = document.querySelectorAll('[role="menu"]');
+      if (!menus.length) {
+        log('✗ меню не открылось вовсе');
+        return;
+      }
+      const texts = Array.from(menus[menus.length - 1].querySelectorAll('button, [role="menuitem"]'))
+        .slice(0, 12)
+        .map((b) => (b.textContent || '').trim().slice(0, 32))
+        .filter(Boolean);
+      log('✗ «Добавить в очередь» не найдено; пункты меню: ' + texts.join(' | ').slice(0, 300));
+    } catch (e) {
+      log('✗ меню не разобрано');
+    }
+  }
+
+  async function addTrackToQueueUI(job) {
+    // Путь 1 (основной): поиск по названию, точное совпадение ID в ссылке
+    let ok = await queueViaSearch(job);
+    // Путь 2: страница трека
+    if (!ok) {
+      log('ℹ поиск не сработал — пробуем страницу трека');
+      ok = await queueViaTrackPage(job);
+    }
+    if (!ok) dumpDiagnostics();
+    return ok;
+  }
+
+  async function queueViaSearch(job) {
+    const startHref = location.href;
+    const startKey = window.history.state && window.history.state.key;
+    const q = encodeURIComponent(((job.title || '') + ' ' + (job.artist || '')).trim() || job.trackId);
+    log('шаг: ищем трек в Spotify (поиск /tracks)');
+    navigateSpaTo('/search/' + q + '/tracks');
+    // если pushState не заставил приложение перейти — кликаем ссылку
+    await sleep(300);
+    if (!location.pathname.startsWith('/search')) {
+      const a = document.createElement('a');
+      a.href = 'https://open.spotify.com/search/' + q + '/tracks';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    const arrived = await waitFor(() => location.pathname.startsWith('/search'), 5000);
+    if (!arrived) {
+      log('✗ не открылась страница поиска');
+      return false;
+    }
+    await sleep(1000);
+
+    const linkSel = 'main [data-testid="infinite-scroll-list"] a[href*="/track/' + job.trackId + '"]';
+    const link = await waitFor(() => document.querySelector(linkSel) || findTrackLinkLoose(job), 8000);
+    if (!link) {
+      log('✗ точный трек не найден в результатах поиска');
+      return false;
+    }
+    log('шаг: нашли точный трек в результатах');
+
+    const row = link.closest('[data-testid="tracklist-row"], [role="row"], [data-testid="entityRow"]');
+    let more = (row && row.querySelector('button[data-testid="more-button"]')) || null;
+    if (!more) more = findMoreInRowNear(link);
+    if (!more) more = await waitFor(findMoreButtonGlobal, 2500);
+    if (!more) {
+      log('✗ у строки трека не нашли кнопку «⋮»');
+      return false;
+    }
 
     click(more);
     log('шаг: открыли меню трека');
-    const item = await waitFor(findAddToQueueItem, 4500);
+    const item = await waitFor(() => findQueueMenuItem(job), 4500);
     if (!item) {
-      log('✗ пункт «Добавить в очередь» не найден в меню (язык интерфейса Spotify?)');
+      dumpMenuTexts();
       pressEscape();
       pressEscape();
       return false;
     }
     click(item);
     log('шаг: нажали «Добавить в очередь»');
-    await sleep(350);
+    await sleep(400);
     pressEscape();
     pressEscape();
 
-    if (location.pathname !== startPath) {
+    if (location.href !== startHref && window.history.state && window.history.state.key === startKey) {
       history.back();
       log('шаг: вернули прежний вид');
     }
     return true;
   }
 
-  async function openTrackPage(job) {
+  async function queueViaTrackPage(job) {
+    const startHref = location.href;
+    const startKey = window.history.state && window.history.state.key;
+
     const a = document.createElement('a');
     a.href = '/track/' + job.trackId;
     a.style.display = 'none';
@@ -554,58 +695,46 @@
     a.click();
     a.remove();
     const ok = await waitFor(() => location.pathname.indexOf('/track/' + job.trackId) >= 0, 5000);
-    if (!ok) return null;
-    await sleep(1100); // даём отрисоваться шапке
-    const btn = await waitFor(findMoreButtonGlobal, 5000);
-    if (btn) {
-      log('шаг: открыли страницу трека, нашли кнопку «…»');
-      return btn;
+    if (!ok) {
+      log('✗ не открылась страница трека');
+      return false;
     }
-    log('✗ страница трека открылась, но кнопка «…» не найдена');
-    return null;
-  }
+    await sleep(1200);
+    log('шаг: открыли страницу трека');
 
-  async function openSearchPath(job) {
-    const wasSearch = location.pathname.startsWith('/search');
-    if (!wasSearch) {
-      const link = document.querySelector('a[href="/search"], [data-testid="search-link"]');
-      if (!link) {
-        log('✗ не нашли кнопку Поиск в навигации');
-        return null;
-      }
-      click(link);
-      log('шаг: открыли страницу поиска');
-      await sleep(900);
+    let more = await waitFor(findMoreButtonGlobal, 5000);
+    if (!more) {
+      const titleLink = await waitFor(
+        () => document.querySelector('[data-testid="context-item-info-title"] a') || document.querySelector('main h1'),
+        2000,
+      );
+      if (titleLink) more = findMoreInRowNear(titleLink) || findMoreInRowNear(titleLink.parentElement || titleLink);
+    }
+    if (!more) {
+      log('✗ на странице трека не нашли кнопку «…»');
+      return false;
     }
 
-    const input = await waitFor(
-      () =>
-        document.querySelector('[data-testid="search-input"]') ||
-        document.querySelector('main input[type="search"]') ||
-        document.querySelector('input[placeholder]'),
-      6000,
-    );
-    if (!input) {
-      log('✗ не нашли поле поиска');
-      return null;
-    }
-    const query = job.title ? job.title + ' ' + job.artist : job.trackId;
-    setReactValue(input, query);
-    try {
-      input.focus && input.focus();
-    } catch (e) {
-      /* ignore */
-    }
-    log('шаг: ввели запрос «' + query.slice(0, 40) + '»');
-
-    const btn = await waitFor(findMoreButtonGlobal, 8000);
-    if (!btn) {
-      log('✗ в результатах поиска не нашли кнопку «…» у трека');
+    click(more);
+    log('шаг: открыли меню трека');
+    const item = await waitFor(() => findQueueMenuItem(job), 4500);
+    if (!item) {
+      dumpMenuTexts();
       pressEscape();
-      return null;
+      pressEscape();
+      return false;
     }
-    log('шаг: нашли трек в результатах поиска');
-    return btn;
+    click(item);
+    log('шаг: нажали «Добавить в очередь»');
+    await sleep(400);
+    pressEscape();
+    pressEscape();
+
+    if (location.href !== startHref && window.history.state && window.history.state.key === startKey) {
+      history.back();
+      log('шаг: вернули прежний вид');
+    }
+    return true;
   }
 
   async function processQueue() {
